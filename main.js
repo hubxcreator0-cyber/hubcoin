@@ -3,8 +3,8 @@ document.addEventListener("DOMContentLoaded", function() {
     tg.ready();
     tg.expand();
 
-    // ⚠️ DEPLOY করার আগে এই URL টি আপনার Render Backend URL দিয়ে পরিবর্তন করুন
-    const API_BASE_URL = 'https://your-backend-url.onrender.com/api'; 
+    // API Base URL টি আপনার Render Backend URL অনুযায়ী সেট করা হয়েছে।
+    const API_BASE_URL = 'https://hubcoin.onrender.com/api'; 
     // ⚠️ আপনার টেলিগ্রাম বটের ইউজারনেম দিন
     const BOT_USERNAME = 'HubCoin_minerbot'; 
 
