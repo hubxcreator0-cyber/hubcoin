@@ -2,11 +2,8 @@ import os
 import json
 import logging
 from datetime import date
-from threading import Thread
 from dotenv import load_dotenv
 
-# --- FIX 1: Import ঠিক করা হয়েছে ---
-# send_from_directory কে flask থেকে এবং CORS কে flask_cors থেকে আনা হয়েছে
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
@@ -31,37 +28,23 @@ ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID", 0))
 try:
     firebase_config = json.loads(firebase_config_str)
     cred = credentials.Certificate(firebase_config)
-    firebase_admin.initialize_app(cred)
+    if not firebase_admin._apps: # পুনরায় ইনিশিয়ালাইজেশন এড়ানোর জন্য চেক
+        firebase_admin.initialize_app(cred)
     db = firestore.client()
     logging.info("Firebase successfully initialized!")
 except Exception as e:
     logging.error(f"Firebase initialization failed: {e}")
     db = None
 
-# --- FIX 2: Flask অ্যাপ সেটআপ ঠিক করা হয়েছে ---
-# আপনার ফাইল স্ট্রাকচার অনুযায়ী static_folder='static' হবে
+# --- Flask অ্যাপ (Web Service এর জন্য) ---
 app = Flask(__name__, static_folder='static')
+# CORS (Cross-Origin Resource Sharing) কনফিগারেশন
+if FRONTEND_URL:
+    CORS(app, resources={r"/api/*": {"origins": [FRONTEND_URL]}})
+else:
+    CORS(app, resources={r"/api/*": {"origins": "*"}}) # ডেভেলপমেন্টের জন্য
 
-# ⚠️ প্রোডাকশনে '*' এর বদলে আপনার FRONTEND_URL ব্যবহার করুন
-CORS(app, resources={r"/api/*": {"origins": "*"}})
-
-# --- স্ট্যাটিক ফাইল সার্ভ করার জন্য রুট ---
-@app.route('/')
-def serve_index():
-    """index.html ফাইলটি সার্ভ করে।"""
-    return send_from_directory(app.static_folder, 'index.html')
-
-@app.route('/<path:path>')
-def serve_static_files(path):
-    """অন্যান্য স্ট্যাটিক ফাইল (css, js) সার্ভ করে।"""
-    # নিরাপত্তা নিশ্চিত করার জন্য index.html এখানে সার্ভ করা হচ্ছে না
-    if path != "index.html":
-        return send_from_directory(app.static_folder, path)
-    else:
-        # যদি কেউ /index.html লেখে, তাকে হোম পেজে পাঠানো হচ্ছে
-        return serve_index()
-
-# --- 2. Helper Functions (সহকারী ফাংশন) ---
+# --- Helper Functions (সহকারী ফাংশন) ---
 def get_user_ref(user_id):
     return db.collection('users').document(str(user_id))
 
@@ -76,14 +59,24 @@ def create_new_user(user_id, username, referrer_id=None):
     logging.info(f"New user created: {user_id}, Referred by: {referrer_id}")
     return user_data
 
-# --- 3. API Endpoints (ফ্রন্টএন্ডের জন্য) ---
+# --- স্ট্যাটিক ফাইল সার্ভ করার জন্য রুট ---
+@app.route('/')
+def serve_index():
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/<path:path>')
+def serve_static_files(path):
+    if path != "index.html":
+        return send_from_directory(app.static_folder, path)
+    else:
+        return serve_index()
+
+# --- API Endpoints ---
 @app.route("/api/user", methods=['POST'])
 def get_or_create_user():
     data = request.json
     user_id = data.get('user_id')
     username = data.get('username', 'N/A')
-    # TODO: tg.initData ভ্যালিডেশন যোগ করতে হবে
-
     if not user_id: return jsonify({"error": "User ID missing"}), 400
     try:
         user_doc = get_user_ref(user_id).get()
@@ -178,7 +171,7 @@ def get_leaderboard():
         logging.error(f"API Error on /api/leaderboard: {e}")
         return jsonify({"error": "Could not fetch leaderboard"}), 500
 
-# --- 4. Telegram Bot Command Handlers ---
+# --- Telegram Bot Command Handlers (Worker এর জন্য) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id, username = str(user.id), user.username or user.first_name
@@ -214,19 +207,20 @@ async def update_leaderboard_command(update: Update, context: ContextTypes.DEFAU
         logging.error(f"Leaderboard update failed: {e}")
         await update.message.reply_text(f"❌ Failed to update leaderboard. Error: {e}")
 
-# --- 5. অ্যাপ চালনা ---
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False)
-
-def main() -> None:
-    flask_thread = Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    tg_app = Application.builder().token(BOT_TOKEN).build()
-    tg_app.add_handler(CommandHandler("start", start))
-    tg_app.add_handler(CommandHandler("updateleaderboard", update_leaderboard_command))
+# --- এই অংশটি শুধুমাত্র Worker হিসেবে চালানোর জন্য ---
+def run_bot():
+    """টেলিগ্রাম বটটি পোলিং মোডে চালায়।"""
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("updateleaderboard", update_leaderboard_command))
     logging.info("Starting Telegram bot polling...")
-    tg_app.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling()
 
+# --- এই অংশটি শুধুমাত্র লোকাল টেস্টিং এর জন্য ---
 if __name__ == "__main__":
-    main()
+    # Render Gunicorn ব্যবহার করে 'app' অবজেক্টটি চালাবে।
+    # বটটি আলাদা Worker হিসেবে চালানো হবে।
+    # লোকাল টেস্টিং এর জন্য, আমরা দুটি আলাদা টার্মিনালে চালাবো:
+    # 1. gunicorn server:app
+    # 2. python -c 'from server import run_bot; run_bot()'
+    pass
