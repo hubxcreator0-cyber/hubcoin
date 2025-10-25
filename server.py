@@ -6,7 +6,7 @@ from threading import Thread
 from dotenv import load_dotenv
 
 from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask_cors import CORS, send_from_directory
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -36,9 +36,22 @@ except Exception as e:
     db = None
 
 # Flask অ্যাপ সেটআপ
-app = Flask(__name__)
+# ফ্রন্টএন্ড ফাইলগুলো সার্ভ করার জন্য static_folder কনফিগার করা হয়েছে।
+# এটি backend ফোল্ডারের এক ধাপ বাইরে থাকা ফাইলগুলোকে নির্দেশ করে।
+app = Flask(__name__, static_folder='../')
 # ⚠️ প্রোডাকশনে '*' এর বদলে আপনার FRONTEND_URL ব্যবহার করুন
 CORS(app, resources={r"/api/*": {"origins": "*"}}) 
+
+# --- স্ট্যাটিক ফাইল সার্ভ করার জন্য রুট ---
+@app.route('/')
+def serve_index():
+    """index.html ফাইলটি সার্ভ করে।"""
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/<path:path>')
+def serve_static_files(path):
+    """অন্যান্য স্ট্যাটিক ফাইল (css, js, images) সার্ভ করে।"""
+    return send_from_directory(app.static_folder, path)
 
 # --- 2. Helper Functions (সহকারী ফাংশন) ---
 def get_user_ref(user_id):
